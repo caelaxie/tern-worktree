@@ -1,0 +1,18 @@
+schema = 1
+id = "worktree"
+name = "Worktree"
+version = "0.1.0"
+description = "Git worktree management: list, open and create worktrees via Git from a palette command or keybinding."
+host = "host.luau"
+window = "window.luau"
+
+[[blocks]]
+id = "picker"
+title = "Worktrees"
+# Launched by window.luau's "Worktree: Worktrees" command, never from the palette.
+palette = false
+
+[[blocks]]
+id = "configure"
+title = "Configure worktree directory"
+palette = false
