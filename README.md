@@ -30,7 +30,7 @@ tern plugin link "$PWD"
 
 ## Usage
 
-Focus a terminal pane in a Git repository and open **Worktree: Worktrees** from Tern's command palette. The picker lists two groups:
+Focus a terminal pane in a Git repository and open **Worktree: Worktrees** from Tern's command palette. Repeating the command focuses the existing picker without resetting its state; after closing it, the command opens a fresh pane below the focused pane. The picker lists two groups:
 
 - **Worktrees**: every worktree of the repository (the branch name, or `(detached <sha>)`), with its path. Press **Enter** to open it in a new tab and focus the tab.
 - **Branches**: local branches that have no worktree, with their latest commit. Press **Enter** to create a worktree for the branch and open it in a new tab.
@@ -51,7 +51,7 @@ If a command fails, its output is shown in the picker.
 
 ## Configuration
 
-Open **Worktree: Configure directory** from Tern's command palette to set the parent directory for new worktrees. The input is prefilled with the current value. Press **Enter** or click **Save** to persist the value; press **Esc** or click **Cancel** to leave it unchanged.
+Open **Worktree: Configure directory** from Tern's command palette to set the parent directory for new worktrees. Repeating the command focuses the existing configuration pane without resetting its input; after closing it, the command opens a fresh pane below the focused pane. The input is prefilled with the current value. Press **Enter** or click **Save** to persist the value; press **Esc** or click **Cancel** to leave it unchanged.
 
 The setting is stored locally in Tern's plugin store and shared across this machine's plugin windows and repositories. There is no per-repository setting.
 

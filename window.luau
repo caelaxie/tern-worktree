@@ -1,15 +1,25 @@
 --!strict
--- Worktree, window half: the stylesheet and the palette command
--- "Worktree: Worktrees", which opens the `picker` block as a split below the
--- focused pane. The block lists the repository's worktrees and branches
--- (host.luau); nothing is read from the plugin's files here.
+-- Worktree, window half: the stylesheet and palette commands. Each command
+-- focuses its existing dialog pane or opens a split below the focused pane.
+-- The picker lists the repository's worktrees and branches (host.luau);
+-- nothing is read from the plugin's files here.
+
+local function open_dialog(cx: WindowCx, kind: string)
+	for _, pane in cx.session:panes() do
+		if pane.block == kind then
+			cx.layout:focus(pane.pane)
+			return
+		end
+	end
+	cx:new_block(kind, {}, "below")
+end
 
 tern.command({
 	id = "open_worktrees",
 	title = "Worktree: Worktrees",
 	icon = "puzzle",
 	run = function(cx: WindowCx)
-		cx:new_block("worktree.picker", {}, "below")
+		open_dialog(cx, "worktree.picker")
 	end,
 })
 
@@ -18,7 +28,7 @@ tern.command({
 	title = "Worktree: Configure directory",
 	icon = "puzzle",
 	run = function(cx: WindowCx)
-		cx:new_block("worktree.configure", {}, "below")
+		open_dialog(cx, "worktree.configure")
 	end,
 })
 
