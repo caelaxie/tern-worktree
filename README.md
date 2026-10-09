@@ -2,6 +2,8 @@
 
 A [Tern](https://docs.stencil.so/tern/) plugin for managing Git worktrees from the command palette. It uses Git directly to list, open and create worktrees.
 
+![Opening existing Git worktrees and creating new Git worktrees from Tern's command palette](assets/worktree-demo.gif)
+
 Tested with Tern 0.6.3 and Git 2.55.0.
 
 ## Requirements
