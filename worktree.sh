@@ -4,6 +4,7 @@
 #   worktree.sh open PATH         open PATH in a new Tern tab and focus it
 #   worktree.sh checkout BRANCH [DIRECTORY]   create an existing branch's worktree, open it
 #   worktree.sh create BRANCH [DIRECTORY]     create BRANCH (or reuse it), open it
+#   worktree.sh remove PATH       remove a linked worktree; the branch ref stays
 # Default worktrees use <main checkout name>.<branch>, with "/" replaced by "-".
 # A nonempty native directory setting uses DIRECTORY/<main checkout name>/<branch>.
 # Missing/empty uses the main checkout's parent; relative paths use the main checkout.
@@ -16,7 +17,7 @@ die() {
 }
 
 usage() {
-	printf 'usage: worktree.sh list | open PATH | checkout BRANCH [DIRECTORY] | create BRANCH [DIRECTORY]\n' >&2
+	printf 'usage: worktree.sh list | open PATH | checkout BRANCH [DIRECTORY] | create BRANCH [DIRECTORY] | remove PATH\n' >&2
 	exit 2
 }
 
@@ -32,6 +33,15 @@ open_tab() {
 	block=$(printf '%s' "$tab" | jq -r '.block // empty' 2>/dev/null) || block=
 	[ -n "$block" ] || die "tern did not report a block for the new tab"
 	tern focus "$block"
+}
+
+# Assigns $main from porcelain JSON in $1: record 0 when that record is not bare.
+# The trailing dot stays through command substitution, which would drop a path's
+# trailing newlines. Callers read $main. Do not recapture with main=$(set_main_path ...).
+set_main_path() {
+	main=$(printf '%s' "$1" | jq -j '.[0] | select(.bare != true) | .path // empty' &&
+		printf '.') || return 1
+	main=${main%.}
 }
 
 # NUL-delimited porcelain keeps paths literal, including whitespace and escapes.
@@ -93,10 +103,8 @@ switch_open() {
 		return
 	fi
 
-	main_path=$(printf '%s' "$worktrees" | jq -j '.[0] | select(.bare != true) | .path // empty' &&
-		printf '.') || exit 1
-	main_path=${main_path%.}
-	[ -n "$main_path" ] || die "main repository has no worktree"
+	set_main_path "$worktrees" || exit 1
+	[ -n "$main" ] || die "main repository has no worktree"
 	directory=${3:-}
 	if [ -n "$directory" ]; then
 		case $directory in
@@ -105,12 +113,12 @@ switch_open() {
 			directory=$HOME${directory#\~}
 			;;
 		/*) ;;
-		*) directory=$main_path/$directory ;;
+		*) directory=$main/$directory ;;
 		esac
-		path="$directory/${main_path##*/}/$branch"
+		path="$directory/${main##*/}/$branch"
 	else
 		safe_branch=$(printf '%s' "$branch" | jq -Rr 'gsub("/"; "-")')
-		path="${main_path%/*}/${main_path##*/}.$safe_branch"
+		path="${main%/*}/${main##*/}.$safe_branch"
 	fi
 	if [ -e "$path" ] || [ -L "$path" ] ||
 		printf '%s' "$worktrees" | jq -e --arg path "$path" 'any(.[]; .path == $path)' >/dev/null; then
@@ -136,6 +144,48 @@ switch_open() {
 	open_tab "$path"
 }
 
+remove_path() {
+	path=$1
+	[ -n "$path" ] || die "path is empty"
+	need git
+	need jq
+	git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+	worktrees=$(worktrees_json) || exit 1
+	set_main_path "$worktrees" || exit 1
+	[ -n "$main" ] || die "main repository has no worktree"
+	class=$(printf '%s' "$worktrees" | jq -r --arg path "$path" '
+		if any(.[]; .path == $path and .bare == true) then "bare"
+		elif (.[0] | select(.bare != true) | .path) == $path then "main"
+		elif any(.[]; .path == $path and .bare != true) then "linked"
+		else "absent"
+		end') || exit 1
+	case $class in
+	absent)
+		return 0
+		;;
+	main)
+		die "refusing to remove the main worktree: $path"
+		;;
+	bare)
+		die "refusing to remove a bare worktree: $path"
+		;;
+	linked)
+		status=0
+		git -C "$main" worktree remove -- "$path" || status=$?
+		if [ "$status" -ne 0 ]; then
+			worktrees=$(worktrees_json) || exit "$status"
+			if printf '%s' "$worktrees" | jq -e --arg path "$path" 'any(.[]; .path == $path)' >/dev/null; then
+				exit "$status"
+			fi
+		fi
+		return 0
+		;;
+	*)
+		die "cannot classify worktree path"
+		;;
+	esac
+}
+
 [ $# -ge 1 ] || usage
 cmd=$1
 shift
@@ -156,6 +206,10 @@ checkout)
 create)
 	[ $# -eq 1 ] || [ $# -eq 2 ] || usage
 	switch_open "$1" create "${2:-}"
+	;;
+remove)
+	[ $# -eq 1 ] || usage
+	remove_path "$1"
 	;;
 *)
 	usage
