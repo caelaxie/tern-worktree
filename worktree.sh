@@ -4,7 +4,6 @@
 #   worktree.sh open PATH         open PATH in a new Tern tab and focus it
 #   worktree.sh checkout BRANCH [DIRECTORY]   create an existing branch's worktree, open it
 #   worktree.sh create BRANCH [DIRECTORY]     create BRANCH (or reuse it), open it
-#   worktree.sh remove PATH       remove a linked worktree; the branch ref stays
 # Default worktrees use <main checkout name>.<branch>, with "/" replaced by "-".
 # A nonempty native directory setting uses DIRECTORY/<main checkout name>/<branch>.
 # Missing/empty uses the main checkout's parent; relative paths use the main checkout.
@@ -35,7 +34,6 @@ open_tab() {
 	tern focus "$block"
 }
 
-# Assigns $main from porcelain JSON in $1: record 0 when that record is not bare.
 # The trailing dot stays through command substitution, which would drop a path's
 # trailing newlines. Callers read $main. Do not recapture with main=$(set_main_path ...).
 set_main_path() {
@@ -61,25 +59,24 @@ list() {
 	need jq
 	git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
 	worktrees=$(worktrees_json) || exit 1
+	set_main_path "$worktrees" || exit 1
 	branches=$(git for-each-ref --format='%(refname:strip=2)%00%(objectname:short)%00%(subject)' refs/heads |
 		jq -Rs 'split("\n") | map(select(length > 0) | split("\u0000")
 			| {branch: .[0], sha: .[1], subject: .[2]})') || exit 1
-	printf '%s' "$worktrees" | jq --argjson branches "$branches" '
+	printf '%s' "$worktrees" | jq --argjson branches "$branches" --arg main "$main" '
 		[.[] | select(.bare != true)] as $worktrees
 		| [$worktrees[] | {
-			group: "Worktrees",
-			label: (.branch // "(detached \(.head[0:7] // "unknown"))"),
-			detail: .path,
-			action: "open",
-			target: .path
+			kind: (if $main != "" and .path == $main then "main" else "linked" end),
+			path: .path,
+			head: (if .branch then {kind: "attached", name: .branch}
+				else {kind: "detached", sha: (.head // "")} end)
 		}]
 		+ [$branches[] | select(.branch as $branch |
 			any($worktrees[]; .branch == $branch) | not) | {
-			group: "Branches",
-			label: .branch,
-			detail: ([.sha, .subject] | map(select(. != null)) | join(" ")),
-			action: "checkout",
-			target: .branch
+			kind: "branch",
+			name: .branch,
+			sha: .sha,
+			subject: (.subject // "")
 		}]'
 }
 

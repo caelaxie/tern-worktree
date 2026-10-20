@@ -1,6 +1,6 @@
 # tern-worktree
 
-A [Tern](https://docs.stencil.so/tern/) plugin for managing Git worktrees from the command palette. It uses Git directly to list, open and create worktrees.
+A [Tern](https://docs.stencil.so/tern/) plugin for managing Git worktrees from the command palette. It uses Git directly to list, open, create, and remove worktrees.
 
 ![Opening existing Git worktrees and creating new Git worktrees from Tern's command palette](assets/worktree-demo.gif)
 
@@ -41,6 +41,12 @@ Focus a terminal pane in a Git repository and open **Worktree: Worktrees** from 
 
 Type a new branch name to get a **Create '<name>' worktree** entry. It creates the branch and its worktree and opens it in a new tab. If a local branch with that name already exists, the existing branch is used instead of failing.
 
+Press **Delete** to remove the selected linked worktree. On a keyboard without a forward-delete key, press **Fn+Delete**. **Backspace** still deletes the last character of the filter.
+
+Delete opens a sheet titled **Remove worktree**. **Remove** or **Enter** deletes that worktree and leaves its branch. **Cancel** or **Esc** returns to the list and does not run Git. While the main checkout is selected, the dock reads `main checkout stays` and **Delete** does not open the sheet. **Delete** on a branch row, or on the create row, explains why and does not run Git.
+
+After a remove, the picker stays open and reloads. When that worktree was on a branch, the branch is selected under **Branches**. Git refuses a dirty or locked worktree. The picker shows Git's output. That sheet has no force button.
+
 The filter accepts only letters, digits, `.`, `_`, `/` and `-`; other characters are dropped as you type. Branch names containing `+`, `@` or `#` can't be created from the picker.
 
 If a command fails, its output is shown in the picker.
@@ -52,6 +58,8 @@ If a command fails, its output is shown in the picker.
 - By default, a new worktree is created beside the main checkout at `<repo>.<branch>`, with `/` in the branch name replaced by `-`, even when invoked from a linked worktree. For example, branch `feature/login` in repository `/projects/app` uses `/projects/app.feature-login`.
 - Git creates missing parent directories as needed. If the destination already exists or is already registered as a worktree, creation fails safely rather than overwriting it. Under the default layout, different branch names can map to the same destination, such as `feature/login` and `feature-login`.
 - A new branch starts from `origin/HEAD` when available, otherwise local `main`, then local `master`, then `HEAD`.
+- Remove runs `git worktree remove` from the main checkout, with no `--force`. It does not delete the branch, and it does not take the configured directory.
+- A path Git does not list is left on disk. Removing that path again does nothing.
 
 ## Configuration
 
@@ -72,7 +80,8 @@ Save an empty value or click **Use default** to restore the default: new worktre
 | type | filter (fuzzy, over name and path or commit) |
 | ↑ ↓, Ctrl+P / Ctrl+N, Tab / Shift+Tab | move the selection |
 | Enter | open, check out or create the selected entry |
-| Esc | clear the filter; with an empty filter, close |
+| Delete | remove the selected linked worktree, after confirm |
+| Esc | clear the filter; with an empty filter, close. On the confirm sheet, return to the list |
 | Ctrl+U, Ctrl+W | clear the filter, delete the last word |
 | Ctrl+R | reload the list |
 

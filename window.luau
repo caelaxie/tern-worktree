@@ -68,4 +68,6 @@ tern.css("picker", table.concat({
 	".wt-btn{padding:5px 14px;border:1px solid var(--l2);border-radius:6px;background-color:transparent;color:var(--t1);cursor:pointer}",
 	".wt-btn:hover{border-color:var(--l3)}",
 	".wt-btn.primary{border-color:var(--accent);background:var(--accent-fill);color:#ffffff}",
+	".wt-btn.danger{border-color:var(--bad);color:var(--bad)}",
+	".wt-btn.danger:hover{border-color:var(--bad)}",
 }, "\n"))
