@@ -1,8 +1,8 @@
 schema = 1
 id = "worktree"
 name = "Worktree"
-version = "0.1.0"
-description = "Git worktree management: list, open and create worktrees via Git from a palette command or keybinding."
+version = "0.2.0"
+description = "Git worktree management: list, open, create, and remove worktrees via Git from a palette command or keybinding."
 host = "host.luau"
 window = "window.luau"
 

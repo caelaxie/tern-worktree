@@ -16,7 +16,7 @@ die() {
 }
 
 usage() {
-	printf 'usage: worktree.sh list | open PATH | checkout BRANCH [DIRECTORY] | create BRANCH [DIRECTORY]\n' >&2
+	printf 'usage: worktree.sh list | open PATH | checkout BRANCH [DIRECTORY] | create BRANCH [DIRECTORY] | remove PATH\n' >&2
 	exit 2
 }
 
@@ -32,6 +32,14 @@ open_tab() {
 	block=$(printf '%s' "$tab" | jq -r '.block // empty' 2>/dev/null) || block=
 	[ -n "$block" ] || die "tern did not report a block for the new tab"
 	tern focus "$block"
+}
+
+# The trailing dot stays through command substitution, which would drop a path's
+# trailing newlines. Callers read $main. Do not recapture with main=$(set_main_path ...).
+set_main_path() {
+	main=$(printf '%s' "$1" | jq -j '.[0] | select(.bare != true) | .path // empty' &&
+		printf '.') || return 1
+	main=${main%.}
 }
 
 # NUL-delimited porcelain keeps paths literal, including whitespace and escapes.
@@ -51,25 +59,24 @@ list() {
 	need jq
 	git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
 	worktrees=$(worktrees_json) || exit 1
+	set_main_path "$worktrees" || exit 1
 	branches=$(git for-each-ref --format='%(refname:strip=2)%00%(objectname:short)%00%(subject)' refs/heads |
 		jq -Rs 'split("\n") | map(select(length > 0) | split("\u0000")
 			| {branch: .[0], sha: .[1], subject: .[2]})') || exit 1
-	printf '%s' "$worktrees" | jq --argjson branches "$branches" '
+	printf '%s' "$worktrees" | jq --argjson branches "$branches" --arg main "$main" '
 		[.[] | select(.bare != true)] as $worktrees
 		| [$worktrees[] | {
-			group: "Worktrees",
-			label: (.branch // "(detached \(.head[0:7] // "unknown"))"),
-			detail: .path,
-			action: "open",
-			target: .path
+			kind: (if $main != "" and .path == $main then "main" else "linked" end),
+			path: .path,
+			head: (if .branch then {kind: "attached", name: .branch}
+				else {kind: "detached", sha: (.head // "")} end)
 		}]
 		+ [$branches[] | select(.branch as $branch |
 			any($worktrees[]; .branch == $branch) | not) | {
-			group: "Branches",
-			label: .branch,
-			detail: ([.sha, .subject] | map(select(. != null)) | join(" ")),
-			action: "checkout",
-			target: .branch
+			kind: "branch",
+			name: .branch,
+			sha: .sha,
+			subject: (.subject // "")
 		}]'
 }
 
@@ -93,10 +100,8 @@ switch_open() {
 		return
 	fi
 
-	main_path=$(printf '%s' "$worktrees" | jq -j '.[0] | select(.bare != true) | .path // empty' &&
-		printf '.') || exit 1
-	main_path=${main_path%.}
-	[ -n "$main_path" ] || die "main repository has no worktree"
+	set_main_path "$worktrees" || exit 1
+	[ -n "$main" ] || die "main repository has no worktree"
 	directory=${3:-}
 	if [ -n "$directory" ]; then
 		case $directory in
@@ -105,12 +110,12 @@ switch_open() {
 			directory=$HOME${directory#\~}
 			;;
 		/*) ;;
-		*) directory=$main_path/$directory ;;
+		*) directory=$main/$directory ;;
 		esac
-		path="$directory/${main_path##*/}/$branch"
+		path="$directory/${main##*/}/$branch"
 	else
 		safe_branch=$(printf '%s' "$branch" | jq -Rr 'gsub("/"; "-")')
-		path="${main_path%/*}/${main_path##*/}.$safe_branch"
+		path="${main%/*}/${main##*/}.$safe_branch"
 	fi
 	if [ -e "$path" ] || [ -L "$path" ] ||
 		printf '%s' "$worktrees" | jq -e --arg path "$path" 'any(.[]; .path == $path)' >/dev/null; then
@@ -136,6 +141,48 @@ switch_open() {
 	open_tab "$path"
 }
 
+remove_path() {
+	path=$1
+	[ -n "$path" ] || die "path is empty"
+	need git
+	need jq
+	git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+	worktrees=$(worktrees_json) || exit 1
+	set_main_path "$worktrees" || exit 1
+	[ -n "$main" ] || die "main repository has no worktree"
+	class=$(printf '%s' "$worktrees" | jq -r --arg path "$path" '
+		if any(.[]; .path == $path and .bare == true) then "bare"
+		elif (.[0] | select(.bare != true) | .path) == $path then "main"
+		elif any(.[]; .path == $path and .bare != true) then "linked"
+		else "absent"
+		end') || exit 1
+	case $class in
+	absent)
+		return 0
+		;;
+	main)
+		die "refusing to remove the main worktree: $path"
+		;;
+	bare)
+		die "refusing to remove a bare worktree: $path"
+		;;
+	linked)
+		status=0
+		git -C "$main" worktree remove -- "$path" || status=$?
+		if [ "$status" -ne 0 ]; then
+			worktrees=$(worktrees_json) || exit "$status"
+			if printf '%s' "$worktrees" | jq -e --arg path "$path" 'any(.[]; .path == $path)' >/dev/null; then
+				exit "$status"
+			fi
+		fi
+		return 0
+		;;
+	*)
+		die "cannot classify worktree path"
+		;;
+	esac
+}
+
 [ $# -ge 1 ] || usage
 cmd=$1
 shift
@@ -156,6 +203,10 @@ checkout)
 create)
 	[ $# -eq 1 ] || [ $# -eq 2 ] || usage
 	switch_open "$1" create "${2:-}"
+	;;
+remove)
+	[ $# -eq 1 ] || usage
+	remove_path "$1"
 	;;
 *)
 	usage
