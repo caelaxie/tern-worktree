@@ -19,13 +19,13 @@ type OpenCmd = { kind: "open", path: string }
 type CheckoutCmd = { kind: "checkout", branch: string }
 type CreateCmd = { kind: "create", branch: string }
 type Primary = OpenCmd | CheckoutCmd | CreateCmd
-type RemoveCmd = { kind: "remove", path: string }
+type RemoveCmd = { kind: "remove", path: string?, branch: string?, force: boolean }
 type Command = Primary | RemoveCmd
 
 type Inflight = { command: Command, row: Row }
 type Mode =
 	{ kind: "list" }
-	| { kind: "confirm", row: Linked }
+	| { kind: "confirm", row: Linked | Branch, force: boolean }
 	| { kind: "running", inflight: Inflight }
 	| { kind: "outcome", inflight: Inflight, status: number, output: string, timed_out: boolean }
 
@@ -225,18 +225,9 @@ local function group_of(row: Row): string?
 	end
 end
 
-local function freed_branch(row: Row): string?
-	if row.kind == "linked" then
-		return attached_name(row.head)
-	elseif row.kind == "main" then
-		return nil
-	elseif row.kind == "branch" then
-		return nil
-	elseif row.kind == "new" then
-		return nil
-	else
-		return unreachable(row)
-	end
+local function freed_branch(_row: Row): string?
+	-- The branch is deleted with the worktree, so there is nothing to reselect.
+	return nil
 end
 
 local function label_text(row: Row): string
@@ -261,8 +252,12 @@ local function command_of(row: Row): Primary
 	end
 end
 
-local function remove_command(row: Linked): RemoveCmd
-	return { kind = "remove", path = row.path }
+local function remove_command(row: Linked | Branch, force: boolean): RemoveCmd
+	if row.kind == "branch" then
+		return { kind = "remove", path = nil, branch = row.name, force = force }
+	end
+	local branch = if row.head.kind == "attached" then row.head.name else nil
+	return { kind = "remove", path = row.path, branch = branch, force = force }
 end
 
 local function remove_refusal(row: Main | Branch | NewBranch): string
@@ -295,7 +290,19 @@ local function argv_of(cmd: Command): { string }
 		end
 		return argv
 	elseif cmd.kind == "remove" then
-		return { "sh", SCRIPT, "remove", cmd.path }
+		local argv = { "sh", SCRIPT, "remove" }
+		if cmd.path ~= nil then
+			table.insert(argv, "--")
+			table.insert(argv, cmd.path)
+		end
+		if cmd.force then
+			table.insert(argv, "--force")
+		end
+		if cmd.branch ~= nil then
+			table.insert(argv, "--branch")
+			table.insert(argv, cmd.branch)
+		end
+		return argv
 	else
 		return unreachable(cmd)
 	end
@@ -494,9 +501,9 @@ local function path_inside(path: string, root: string): boolean
 end
 
 -- spawn reports ENOENT when cwd is gone, which reads as "sh" missing.
-local function list_cwd(s: State, removed: string): string
+local function list_cwd(s: State, removed: string?): string
 	local cwd = s.cx.cwd or HOME
-	if not path_inside(cwd, removed) then
+	if removed == nil or removed == "" or not path_inside(cwd, removed) then
 		return cwd
 	end
 	for _, row in s.rows do
@@ -706,19 +713,17 @@ local function accept_confirm(s: State)
 		return
 	end
 	local row = s.mode.row
-	begin(s, remove_command(row), row)
+	begin(s, remove_command(row, s.mode.force), row)
 end
 
 local function request_remove(s: State, row: Row)
 	if s.mode.kind ~= "list" then
 		return
 	end
-	if row.kind == "linked" then
-		s.mode = { kind = "confirm", row = row }
+	if row.kind == "linked" or row.kind == "branch" then
+		s.mode = { kind = "confirm", row = row, force = false }
 	elseif row.kind == "main" then
 		return
-	elseif row.kind == "branch" then
-		show_note(s, remove_refusal(row))
 	elseif row.kind == "new" then
 		show_note(s, remove_refusal(row))
 	else
@@ -871,12 +876,21 @@ local function options_view(s: State): Node
 	return ui.el("div", { class = "wt-opts", key = "opts" }, rows)
 end
 
-local function confirm_text(row: Linked): string
+local function confirm_text(row: Linked | Branch, force: boolean): string
+	if row.kind == "branch" then
+		return `Delete branch {row.name}, even if it is not merged.`
+	end
 	local path = show_home(row.path)
 	local head = row.head
 	if head.kind == "attached" then
-		return `Remove the worktree at {path}. The branch {head.name} stays.`
+		if force then
+			return `Force-remove the worktree at {path} and delete branch {head.name}, even if the worktree is dirty or locked or the branch is not merged. Uncommitted changes and untracked files are deleted.`
+		end
+		return `Remove the worktree at {path} and delete branch {head.name}, even if the branch is not merged.`
 	elseif head.kind == "detached" then
+		if force then
+			return `Force-remove the detached worktree at {path}, even if it is dirty or locked. Uncommitted changes and untracked files are deleted. No branch is deleted.`
+		end
 		return `Remove the detached worktree at {path}. No branch is deleted.`
 	else
 		return unreachable(head)
@@ -891,20 +905,33 @@ local function layer_view(s: State): Node?
 			elseif mode.status == 0 then "exit 0"
 			elseif mode.status == -1 then "failed"
 			else `exit {mode.status}`
+		local buttons = {
+			button("Back", "back"),
+			button("Close", "close", "primary"),
+		}
+		local cmd = inflight.command
+		if mode.status ~= 0 and cmd.kind == "remove" and not cmd.force then
+			table.insert(buttons, 2, button("Force…", "force"))
+		end
 		return sheet("outcome", label_text(inflight.row), {
 			ui.row({ ui.badge(verdict, if mode.status == 0 then "success" else "error") }),
 			if mode.output == "" then ui.text(ui.span("no output", "muted")) else ui.ansi(show_home(mode.output)),
-		}, {
-			button("Back", "back"),
-			button("Close", "close", "primary"),
-		})
+		}, buttons)
 	elseif mode.kind == "confirm" then
-		return sheet("confirm", "Remove worktree", {
-			ui.el("div", { text = confirm_text(mode.row) }),
-		}, {
-			button("Cancel", "cancel"),
-			button("Remove", "remove", "danger"),
-		})
+		local branch_only = mode.row.kind == "branch"
+		local title = if mode.force
+			then if branch_only then "Force delete branch" else "Force remove worktree"
+			else if branch_only then "Delete branch" else "Remove worktree"
+		local action = if mode.force
+			then if branch_only then "Force delete" else "Force remove"
+			else if branch_only then "Delete" else "Remove"
+		local buttons = { button("Cancel", "cancel"), button(action, "remove", "danger") }
+		if not mode.force and not branch_only then
+			table.insert(buttons, 2, button("Force…", "force"))
+		end
+		return sheet("confirm", title, {
+			ui.el("div", { text = confirm_text(mode.row, mode.force) }),
+		}, buttons)
 	elseif mode.kind == "list" then
 		return nil
 	elseif mode.kind == "running" then
@@ -915,12 +942,10 @@ local function layer_view(s: State): Node?
 end
 
 local function remove_hint(row: Row): { Span }?
-	if row.kind == "linked" then
+	if row.kind == "linked" or row.kind == "branch" then
 		return { ui.span("del", "key"), ui.span(" remove  ", "muted") }
 	elseif row.kind == "main" then
 		return { ui.span("main checkout stays", "muted") }
-	elseif row.kind == "branch" then
-		return nil
 	elseif row.kind == "new" then
 		return nil
 	else
@@ -940,7 +965,9 @@ local function hints(s: State): Node
 	if mode.kind == "outcome" then
 		groups = { k("⏎", "close"), k("esc", "back") }
 	elseif mode.kind == "confirm" then
-		groups = { k("⏎", "remove"), k("esc", "cancel") }
+		groups = if mode.force
+			then { k("⏎", "force remove"), k("esc", "cancel") }
+			else { k("⏎", "remove"), k("esc", "cancel") }
 	elseif mode.kind == "list" then
 		groups = { k("↑↓", "select"), k("⏎", "run"), k("esc", if s.query ~= "" then "clear" else "close"), k("^R", "reload") }
 		local m = s.shown[s.sel]
@@ -1143,6 +1170,17 @@ tern.block.define("picker", {
 		elseif ev.act == "cancel" then
 			if s.mode.kind == "confirm" then
 				s.mode = { kind = "list" }
+			end
+		elseif ev.act == "force" then
+			local mode = s.mode
+			if mode.kind == "confirm" and not mode.force then
+				s.mode = { kind = "confirm", row = mode.row, force = true }
+			elseif mode.kind == "outcome" then
+				local cmd = mode.inflight.command
+				local row = mode.inflight.row
+				if cmd.kind == "remove" and not cmd.force and (row.kind == "linked" or row.kind == "branch") then
+					s.mode = { kind = "confirm", row = row, force = true }
+				end
 			end
 		elseif ev.act == "remove" then
 			accept_confirm(s)

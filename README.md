@@ -41,11 +41,13 @@ Focus a terminal pane in a Git repository and open **Worktree: Worktrees** from 
 
 Type a new branch name to get a **Create '<name>' worktree** entry. It creates the branch and its worktree, then `cd`s the terminal in this tab into it. If a local branch with that name already exists, the existing branch is used instead of failing.
 
-Press **Delete** to remove the selected linked worktree. On a keyboard without a forward-delete key, press **Fn+Delete**. **Backspace** still deletes the last character of the filter.
+Press **Delete** to remove the selected linked worktree, or a branch that has no worktree. On a keyboard without a forward-delete key, press **Fn+Delete**. **Backspace** still deletes the last character of the filter.
 
-Delete opens a sheet titled **Remove worktree**. **Remove** or **Enter** deletes that worktree and leaves its branch. **Cancel** or **Esc** returns to the list and does not run Git. While the main checkout is selected, the dock reads `main checkout stays` and **Delete** does not open the sheet. **Delete** on a branch row, or on the create row, explains why and does not run Git.
+Delete on a worktree opens a sheet titled **Remove worktree**. **Remove** or **Enter** deletes that worktree and its branch, even when the branch is not merged. **Cancel** or **Esc** returns to the list and does not run Git. **Force…** opens a second sheet. **Force remove** or **Enter** there also deletes a dirty or locked worktree. Uncommitted changes and untracked files are deleted. A detached worktree has no branch to delete. While the main checkout is selected, the dock reads `main checkout stays` and **Delete** does not open the sheet. **Delete** on the create row explains why and does not run Git.
 
-After a remove, the picker stays open and reloads. When that worktree was on a branch, the branch is selected under **Branches**. Git refuses a dirty or locked worktree. The picker shows Git's output. That sheet has no force button.
+**Delete** on a branch row opens **Delete branch**. **Delete** or **Enter** runs `git branch -D`. The branch is removed even if it is not merged.
+
+After a remove, the picker stays open and reloads. If a plain remove is refused, the result sheet has **Force…**, which opens the force confirmation before anything is deleted.
 
 The filter accepts only letters, digits, `.`, `_`, `/` and `-`; other characters are dropped as you type. Branch names containing `+`, `@` or `#` can't be created from the picker.
 
@@ -59,7 +61,7 @@ If a command fails, its output is shown in the picker.
 - If that config has no `worktree-path`, a new worktree is created beside the main checkout at `<repo>.<branch>`, with `/` in the branch name replaced by `-`, even when invoked from a linked worktree. For example, branch `feature/login` in repository `/projects/app` uses `/projects/app.feature-login`.
 - Git creates missing parent directories as needed. If the destination already exists or is already registered as a worktree, creation fails safely rather than overwriting it. Under the default layout, different branch names can map to the same destination, such as `feature/login` and `feature-login`.
 - A new branch starts from `origin/HEAD` when available, otherwise local `main`, then local `master`, then `HEAD`.
-- Remove runs `git worktree remove` from the main checkout, with no `--force`. It does not delete the branch, and it does not take the configured directory.
+- Remove runs `git worktree remove` from the main checkout, then `git branch -D` for an attached branch. It does not take the configured directory. **Force remove** passes `--force` twice, so a dirty or locked worktree is removed, and then deletes the branch the same way. A plain remove does not pass `--force`.
 - A path Git does not list is left on disk. Removing that path again does nothing.
 
 ## Configuration

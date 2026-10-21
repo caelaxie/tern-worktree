@@ -34,7 +34,7 @@ die() {
 }
 
 usage() {
-	printf 'usage: worktree.sh list | open PATH | checkout BRANCH [DIRECTORY] | create BRANCH [DIRECTORY] | remove PATH\n' >&2
+	printf 'usage: worktree.sh list | open PATH | checkout BRANCH [DIRECTORY] | create BRANCH [DIRECTORY] | remove [PATH] [--force] [--branch NAME]\n' >&2
 	exit 2
 }
 
@@ -256,15 +256,34 @@ switch_open() {
 	printf '%s\n' "$path"
 }
 
+# A confirmed removal deletes the branch too, including when it is unmerged.
+# Missing refs are already gone.
+delete_branch() {
+	[ -n "$branch" ] || return 0
+	if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
+		git -C "$main" branch -D -- "$branch" || exit $?
+	fi
+}
+
 remove_path() {
 	path=$1
-	[ -n "$path" ] || die "path is empty"
+	force=${2:-}
+	branch=${3:-}
+	[ -n "$path" ] || [ -n "$branch" ] || die "path is empty"
 	need git
 	need jq
 	git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
 	worktrees=$(worktrees_json) || exit 1
 	set_main_path "$worktrees" || exit 1
 	[ -n "$main" ] || die "main repository has no worktree"
+	if [ -z "$path" ]; then
+		delete_branch
+		return
+	fi
+	if [ -z "$branch" ]; then
+		branch=$(printf '%s' "$worktrees" | jq -r --arg path "$path" '
+			first(.[] | select(.path == $path and .branch != null) | .branch) // empty') || exit 1
+	fi
 	class=$(printf '%s' "$worktrees" | jq -r --arg path "$path" '
 		if any(.[]; .path == $path and .bare == true) then "bare"
 		elif (.[0] | select(.bare != true) | .path) == $path then "main"
@@ -273,7 +292,8 @@ remove_path() {
 		end') || exit 1
 	case $class in
 	absent)
-		return 0
+		delete_branch
+		return
 		;;
 	main)
 		die "refusing to remove the main worktree: $path"
@@ -283,14 +303,20 @@ remove_path() {
 		;;
 	linked)
 		status=0
-		git -C "$main" worktree remove -- "$path" || status=$?
+		if [ "$force" = force ]; then
+			# Once overrides a dirty tree. Twice also overrides a lock.
+			git -C "$main" worktree remove --force --force -- "$path" || status=$?
+		else
+			git -C "$main" worktree remove -- "$path" || status=$?
+		fi
 		if [ "$status" -ne 0 ]; then
 			worktrees=$(worktrees_json) || exit "$status"
 			if printf '%s' "$worktrees" | jq -e --arg path "$path" 'any(.[]; .path == $path)' >/dev/null; then
 				exit "$status"
 			fi
 		fi
-		return 0
+		delete_branch
+		return
 		;;
 	*)
 		die "cannot classify worktree path"
@@ -320,8 +346,37 @@ create)
 	switch_open "$1" create "${2:-}"
 	;;
 remove)
-	[ $# -eq 1 ] || usage
-	remove_path "$1"
+	force=
+	path=
+	branch=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--force)
+			force=force
+			;;
+		--branch)
+			shift
+			[ $# -ge 1 ] || usage
+			branch=$1
+			;;
+		--)
+			shift
+			[ $# -ge 1 ] && [ -z "$path" ] || usage
+			path=$1
+			;;
+		-*)
+			usage
+			;;
+		*)
+			[ -z "$path" ] || usage
+			path=$1
+			;;
+		esac
+		shift
+	done
+	[ $# -eq 0 ] || usage
+	[ -n "$path" ] || [ -n "$branch" ] || usage
+	remove_path "$path" "$force" "$branch"
 	;;
 *)
 	usage
