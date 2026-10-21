@@ -555,7 +555,67 @@ local function load_options(s: State, prefer: string?, cwd: string?)
 	end
 end
 
-local function finish(s: State, inflight: Inflight, status: number, output: string, timed_out: boolean)
+local function sh_single(path: string): string
+	return "'" .. (path:gsub("'", "'\\''")) .. "'"
+end
+
+local function shell_program(program: string?): boolean
+	local base = (program or ""):match("[^/]+$") or ""
+	return base == "zsh" or base == "bash" or base == "fish" or base == "sh"
+end
+
+--- Pane the picker was opened from. Kv is set by the window command; the cwd
+--- match covers a picker that was already open before that was recorded.
+local function shell_pane(s: State): number?
+	local panes = tern.pane.list()
+	local saved = tern.kv.get("shell_pane")
+	if type(saved) == "number" then
+		for _, info in panes do
+			if info.pane == saved then
+				return saved
+			end
+		end
+	end
+	local cwd = s.cx.cwd
+	local found: number? = nil
+	for _, info in panes do
+		if info.pane ~= s.cx.pane and info.cwd == cwd and shell_program(info.program) then
+			if found ~= nil then
+				return found
+			end
+			found = info.pane
+		end
+	end
+	return found
+end
+
+local function stdout_path(stdout: string): string?
+	local path: string? = nil
+	for line in (stdout .. "\n"):gmatch("(.-)\n") do
+		if line ~= "" then
+			path = line
+		end
+	end
+	return path
+end
+
+--- cd the current tab's terminal into `path`. Returns false and a reason when
+--- there is no pane to write to.
+local function switch_shell(s: State, path: string): (boolean, string?)
+	local pane = shell_pane(s)
+	if pane == nil then
+		return false, "No terminal in this tab to switch into the worktree."
+	end
+	local ok, err = pcall(function()
+		tern.pane.write(pane, "cd -- " .. sh_single(path) .. "\r")
+	end)
+	if not ok then
+		return false, tostring(err)
+	end
+	return true, nil
+end
+
+local function finish(s: State, inflight: Inflight, status: number, output: string, timed_out: boolean, stdout: string?)
 	if s.closed then
 		return
 	end
@@ -564,6 +624,27 @@ local function finish(s: State, inflight: Inflight, status: number, output: stri
 		s.mode = { kind = "list" }
 		load_options(s, freed_branch(inflight.row), list_cwd(s, inflight.command.path))
 		render(s)
+		return
+	end
+	if status == 0 and (inflight.command.kind == "create" or inflight.command.kind == "checkout") then
+		local path = stdout_path(stdout or "")
+		local switched, why = false, "worktree.sh did not report a path"
+		if path ~= nil then
+			switched, why = switch_shell(s, path)
+		end
+		if not switched then
+			s.mode = {
+				kind = "outcome",
+				inflight = inflight,
+				status = 1,
+				output = why or "could not switch to the worktree",
+				timed_out = false,
+			}
+			render(s)
+			return
+		end
+		s.cx:toast("success", label_text(inflight.row), path or "")
+		close(s)
 		return
 	end
 	if status == 0 then
@@ -590,7 +671,7 @@ local function begin(s: State, cmd: Command, row: Row)
 			if res.stderr ~= "" then
 				out = if out == "" or out:sub(-1) == "\n" then out .. res.stderr else out .. "\n" .. res.stderr
 			end
-			finish(s, inflight, res.status, out, res.timed_out)
+			finish(s, inflight, res.status, out, res.timed_out, res.stdout)
 		end)
 	end)
 	if not ok then
@@ -599,7 +680,25 @@ local function begin(s: State, cmd: Command, row: Row)
 end
 
 local function choose(s: State, row: Row)
-	begin(s, command_of(row), row)
+	local cmd = command_of(row)
+	if cmd.kind == "open" then
+		local switched, why = switch_shell(s, cmd.path)
+		if not switched then
+			s.mode = {
+				kind = "outcome",
+				inflight = { command = cmd, row = row },
+				status = 1,
+				output = why or "could not switch to the worktree",
+				timed_out = false,
+			}
+			render(s)
+			return
+		end
+		s.cx:toast("success", label_text(row), cmd.path)
+		close(s)
+		return
+	end
+	begin(s, cmd, row)
 end
 
 local function accept_confirm(s: State)
@@ -988,7 +1087,7 @@ tern.block.define("picker", {
 		local body: { Node } = {
 			ui.el("div", { class = "wt-title", text = "Worktrees" }),
 			ui.el("div", { class = "wt-msg" }, {
-				ui.md("Pick a worktree to open it in a tab, pick a branch to create its worktree, or type a new branch name to create it."),
+				ui.md("Pick a worktree, a branch, or a new branch name. Each one cds this tab's terminal into that worktree."),
 			}),
 			filter_view(s),
 		}

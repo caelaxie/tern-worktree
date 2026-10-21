@@ -36,10 +36,10 @@ tern plugin link "$PWD"
 
 Focus a terminal pane in a Git repository and open **Worktree: Worktrees** from Tern's command palette. Repeating the command focuses the existing picker without resetting its state; after closing it, the command opens a fresh pane below the focused pane. The picker lists two groups:
 
-- **Worktrees**: every worktree of the repository (the branch name, or `(detached <sha>)`), with its path. Press **Enter** to open it in a new tab and focus the tab.
-- **Branches**: local branches that have no worktree, with their latest commit. Press **Enter** to create a worktree for the branch and open it in a new tab.
+- **Worktrees**: every worktree of the repository (the branch name, or `(detached <sha>)`), with its path. Press **Enter** to `cd` the terminal in this tab into it.
+- **Branches**: local branches that have no worktree, with their latest commit. Press **Enter** to create a worktree for the branch and `cd` the terminal in this tab into it.
 
-Type a new branch name to get a **Create '<name>' worktree** entry. It creates the branch and its worktree and opens it in a new tab. If a local branch with that name already exists, the existing branch is used instead of failing.
+Type a new branch name to get a **Create '<name>' worktree** entry. It creates the branch and its worktree, then `cd`s the terminal in this tab into it. If a local branch with that name already exists, the existing branch is used instead of failing.
 
 Press **Delete** to remove the selected linked worktree. On a keyboard without a forward-delete key, press **Fn+Delete**. **Backspace** still deletes the last character of the filter.
 
@@ -55,7 +55,8 @@ If a command fails, its output is shown in the picker.
 
 - An existing registered worktree for the selected branch is reused, regardless of the configured directory.
 - Worktree paths are passed literally, preserving spaces and newlines, including trailing newlines.
-- By default, a new worktree is created beside the main checkout at `<repo>.<branch>`, with `/` in the branch name replaced by `-`, even when invoked from a linked worktree. For example, branch `feature/login` in repository `/projects/app` uses `/projects/app.feature-login`.
+- With no directory setting, a new worktree uses the top-level `worktree-path` in the worktrunk user config (`~/.config/worktrunk/config.toml`, or `$XDG_CONFIG_HOME/worktrunk/config.toml`). `{{ repo }}`, `{{ repo_path }}`, `{{ branch }}`, and `{{ branch | sanitize }}` are expanded (`sanitize` replaces `/` and `\` with `-`). `~` is the home directory. A relative template is relative to the main checkout. The current user config places branch `feature/login` of repository `app` at `~/worktrees/app/feature-login`.
+- If that config has no `worktree-path`, a new worktree is created beside the main checkout at `<repo>.<branch>`, with `/` in the branch name replaced by `-`, even when invoked from a linked worktree. For example, branch `feature/login` in repository `/projects/app` uses `/projects/app.feature-login`.
 - Git creates missing parent directories as needed. If the destination already exists or is already registered as a worktree, creation fails safely rather than overwriting it. Under the default layout, different branch names can map to the same destination, such as `feature/login` and `feature-login`.
 - A new branch starts from `origin/HEAD` when available, otherwise local `main`, then local `master`, then `HEAD`.
 - Remove runs `git worktree remove` from the main checkout, with no `--force`. It does not delete the branch, and it does not take the configured directory.

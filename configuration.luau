@@ -137,13 +137,13 @@ tern.block.define("configure", {
 	view = function(s: State, _cx: BlockCx): BlockView
 		local body: { Node } = {
 			ui.el("div", { class = "wt-title", text = "Worktree directory" }),
-			ui.el("div", { class = "wt-msg", text = "Shared across repositories on this machine. Empty uses sibling <repo>.<branch> worktrees, replacing branch / with -. A custom directory uses <directory>/<repo>/<branch>, preserving branch /. Existing worktrees are not moved. Absolute paths, ~/ paths and paths relative to the main checkout are supported; no shell quoting is needed." }),
+			ui.el("div", { class = "wt-msg", text = "Shared across repositories on this machine. Empty follows worktree-path in the worktrunk user config (~/.config/worktrunk/config.toml). If that is unset, worktrees are siblings named <repo>.<branch>, replacing branch / with -. A custom directory uses <directory>/<repo>/<branch>, preserving branch /. Existing worktrees are not moved. Absolute paths, ~/ paths and paths relative to the main checkout are supported; no shell quoting is needed." }),
 			ui.node("input", {
 				key = "directory",
 				text = s.draft,
 				cursor = units(s.draft:sub(1, s.cursor)),
 				anchor = if s.anchor then units(s.draft:sub(1, s.anchor)) else nil,
-				placeholder = "Default: beside the main checkout",
+				placeholder = "Default: worktrunk config, else beside the main checkout",
 				aria = "Worktree directory",
 			}),
 			ui.row({ button("Save", "save", true), button("Cancel", "cancel"), button("Use default", "default"), button("Clear", "clear") }),

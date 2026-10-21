@@ -14,11 +14,31 @@ local function open_dialog(cx: WindowCx, kind: string)
 	cx:new_block(kind, {}, "below")
 end
 
+--- The terminal the palette was opened from. Opening, creating, and checking out
+--- a worktree cd this pane, not a new tab. A later open while the picker is
+--- already focused leaves it.
+local function remember_shell(cx: WindowCx)
+	local id = cx.session:focused()
+	if id == nil then
+		return
+	end
+	local info = cx.session:pane(id)
+	if info == nil then
+		return
+	end
+	local program = info.program or ""
+	local base = program:match("[^/]+$") or program
+	if info.kind == "terminal" or base == "zsh" or base == "bash" or base == "fish" or base == "sh" then
+		tern.kv.set("shell_pane", id)
+	end
+end
+
 tern.command({
 	id = "open_worktrees",
 	title = "Worktree: Worktrees",
 	icon = "puzzle",
 	run = function(cx: WindowCx)
+		remember_shell(cx)
 		open_dialog(cx, "worktree.picker")
 	end,
 })

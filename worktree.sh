@@ -2,13 +2,31 @@
 # Helper for the worktree plugin's Worktrees picker.
 #   worktree.sh list              JSON rows for worktrees and branch-only branches
 #   worktree.sh open PATH         open PATH in a new Tern tab and focus it
-#   worktree.sh checkout BRANCH [DIRECTORY]   create an existing branch's worktree, open it
-#   worktree.sh create BRANCH [DIRECTORY]     create BRANCH (or reuse it), open it
-# Default worktrees use <main checkout name>.<branch>, with "/" replaced by "-".
+#   worktree.sh checkout BRANCH [DIRECTORY]   create an existing branch's worktree, print its path
+#   worktree.sh create BRANCH [DIRECTORY]     create BRANCH (or reuse it), print its path
 # A nonempty native directory setting uses DIRECTORY/<main checkout name>/<branch>.
-# Missing/empty uses the main checkout's parent; relative paths use the main checkout.
+# With no directory setting, the worktrunk user config's worktree-path is used
+# (~/.config/worktrunk/config.toml, or $XDG_CONFIG_HOME/worktrunk/config.toml).
+# If that is unset, worktrees are siblings: <main checkout name>.<branch>, "/" → "-".
 # Absolute paths are used as-is; "~" and "~/" expand using HOME, without evaluation.
+# A relative worktree-path is relative to the main checkout.
 set -eu
+
+# Plugin processes inherit the Tern daemon's PATH, which is only
+# /usr/bin:/bin:/usr/sbin:/sbin. Global LFS filters invoke `git-lfs filter-process`,
+# so a checkout dies with "git-lfs: command not found" unless the prefix that
+# holds git-lfs is visible. ~/.local/bin is first so a user tern or git wins.
+for dir in \
+	/home/linuxbrew/.linuxbrew/bin \
+	/usr/local/bin \
+	/opt/homebrew/bin \
+	"${HOME:-}/.local/bin"
+do
+	if [ -n "$dir" ] && [ -d "$dir" ]; then
+		PATH="$dir:$PATH"
+	fi
+done
+export PATH
 
 die() {
 	printf 'worktree: %s\n' "$*" >&2
@@ -24,14 +42,36 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || die "$1 not found on PATH"
 }
 
+# PATH above already includes ~/.local/bin. This still finds the app bundle
+# when tern was not installed onto PATH, so create can focus the new tab.
+find_tern() {
+	if command -v tern >/dev/null 2>&1; then
+		command -v tern
+		return
+	fi
+	for cand in \
+		"${HOME:-}/.local/bin/tern" \
+		/opt/homebrew/bin/tern \
+		/usr/local/bin/tern \
+		/Applications/Tern.app/Contents/MacOS/tern \
+		"${HOME:-}/Applications/Tern.app/Contents/MacOS/tern"
+	do
+		if [ -x "$cand" ]; then
+			printf '%s\n' "$cand"
+			return
+		fi
+	done
+	die "tern not found on PATH"
+}
+
 open_tab() {
 	[ -d "$1" ] || die "not a directory: $1"
-	need tern
+	tern_bin=$(find_tern)
 	need jq
-	tab=$(tern new tab --cwd "$1" --json) || die "tern new tab failed"
+	tab=$("$tern_bin" new tab --cwd "$1" --json) || die "tern new tab failed"
 	block=$(printf '%s' "$tab" | jq -r '.block // empty' 2>/dev/null) || block=
 	[ -n "$block" ] || die "tern did not report a block for the new tab"
-	tern focus "$block"
+	"$tern_bin" focus "$block"
 }
 
 # The trailing dot stays through command substitution, which would drop a path's
@@ -80,6 +120,74 @@ list() {
 		}]'
 }
 
+# Top-level worktree-path only. A later [projects.*] table is not the global value.
+wt_template() {
+	if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+		file=$XDG_CONFIG_HOME/worktrunk/config.toml
+	elif [ -n "${HOME:-}" ]; then
+		file=$HOME/.config/worktrunk/config.toml
+	else
+		return 0
+	fi
+	[ -f "$file" ] || return 0
+	raw=$(awk '
+		/^[[:space:]]*#/ { next }
+		/^[[:space:]]*$/ { next }
+		/^[[:space:]]*\[/ { exit }
+		/^[[:space:]]*worktree-path[[:space:]]*=/ {
+			sub(/^[[:space:]]*worktree-path[[:space:]]*=[[:space:]]*/, "")
+			sub(/[[:space:]]+$/, "")
+			print
+			exit
+		}
+	' "$file") || return 1
+	case $raw in
+	\"*\")
+		raw=${raw#\"}
+		raw=${raw%\"}
+		;;
+	\'*\')
+		raw=${raw#\'}
+		raw=${raw%\'}
+		;;
+	esac
+	printf '%s' "$raw"
+}
+
+# {{ repo }}, {{ repo_path }}, {{ branch }}, and {{ branch | sanitize }}.
+# sanitize replaces / and \ with -. Anything else is refused.
+expand_wt_template() {
+	repo=${main##*/}
+	jq -Rr --arg repo "$repo" --arg repo_path "$main" --arg branch "$branch" '
+		def sanitize: gsub("[/\\\\]"; "-");
+		gsub("\\{\\{\\s*repo_path\\s*\\}\\}"; $repo_path)
+		| gsub("\\{\\{\\s*branch\\s*\\|\\s*sanitize\\s*\\}\\}"; ($branch | sanitize))
+		| gsub("\\{\\{\\s*repo\\s*\\}\\}"; $repo)
+		| gsub("\\{\\{\\s*branch\\s*\\}\\}"; $branch)
+	' <<EOF
+$1
+EOF
+}
+
+# Sets $path from the user worktree-path. Returns 1 when the config has none.
+wt_path() {
+	template=$(wt_template) || return 1
+	[ -n "$template" ] || return 1
+	expanded=$(expand_wt_template "$template") || die "can't read worktree-path"
+	case $expanded in
+	*'{''{'*)
+		die "unsupported worktree-path template: $template"
+		;;
+	\~ | \~/*)
+		[ -n "${HOME:-}" ] || die "HOME is empty; cannot expand worktree-path"
+		expanded=$HOME${expanded#\~}
+		;;
+	/*) ;;
+	*) expanded=$main/$expanded ;;
+	esac
+	path=$expanded
+}
+
 switch_open() {
 	need git
 	need jq
@@ -96,7 +204,7 @@ switch_open() {
 		printf '.') || exit 1
 	path=${path%.}
 	if [ -n "$path" ]; then
-		open_tab "$path"
+		printf '%s\n' "$path"
 		return
 	fi
 
@@ -113,6 +221,8 @@ switch_open() {
 		*) directory=$main/$directory ;;
 		esac
 		path="$directory/${main##*/}/$branch"
+	elif wt_path; then
+		:
 	else
 		safe_branch=$(printf '%s' "$branch" | jq -Rr 'gsub("/"; "-")')
 		path="${main%/*}/${main##*/}.$safe_branch"
@@ -121,9 +231,13 @@ switch_open() {
 		printf '%s' "$worktrees" | jq -e --arg path "$path" 'any(.[]; .path == $path)' >/dev/null; then
 		die "worktree path already exists or is registered: $path"
 	fi
+	parent=${path%/*}
+	if [ -n "$parent" ] && [ "$parent" != "$path" ]; then
+		mkdir -p -- "$parent" || die "cannot create worktree parent: $parent"
+	fi
 
 	if git show-ref --verify --quiet "refs/heads/$branch"; then
-		git worktree add -- "$path" "$branch" || exit 1
+		git worktree add -- "$path" "$branch" >&2 || exit 1
 	else
 		[ "$2" = create ] || die "branch does not exist: '$branch'"
 		base=$(git symbolic-ref -q refs/remotes/origin/HEAD) || base=
@@ -136,9 +250,10 @@ switch_open() {
 		else
 			base=HEAD
 		fi
-		git worktree add -b "$branch" -- "$path" "$base" || exit 1
+		git worktree add -b "$branch" -- "$path" "$base" >&2 || exit 1
 	fi
-	open_tab "$path"
+	# The host cds the terminal that opened the picker. A new tab would leave that block put.
+	printf '%s\n' "$path"
 }
 
 remove_path() {
