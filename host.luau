@@ -56,6 +56,118 @@ local HOME = tern.getenv("HOME") or "/"
 local SCRIPT = tern.plugin.dir .. "/worktree.sh"
 local UNGROUPED = ""
 
+local function build_base_path(): { string }
+	local home = HOME:gsub("/+$", "")
+	local candidates = {
+		home .. "/.local/bin",
+		home .. "/bin",
+		home .. "/.cargo/bin",
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/sbin",
+		"/home/linuxbrew/.linuxbrew/bin",
+		"/opt/local/bin",
+		home .. "/.local/share/mise/shims",
+		home .. "/.asdf/shims",
+		home .. "/.nix-profile/bin",
+		"/run/current-system/sw/bin",
+		"/nix/var/nix/profiles/default/bin",
+		"/snap/bin",
+	}
+	local dirs: { string } = {}
+	local seen: { [string]: boolean } = {}
+	local function add(dir: string)
+		local clean = if #dir > 1 then (dir:gsub("/+$", "")) else dir
+		if clean:sub(1, 1) == "/" and not seen[clean] then
+			seen[clean] = true
+			table.insert(dirs, clean)
+		end
+	end
+	for _, dir in candidates do
+		local ok, present = pcall(tern.fs.exists, dir)
+		if ok and present == true then
+			add(dir)
+		end
+	end
+	for entry in ((tern.getenv("PATH") or "") .. ":"):gmatch("([^:]*):") do
+		if entry ~= "" then
+			add(entry)
+		end
+	end
+	return dirs
+end
+
+local BASE_PATH_DIRS = build_base_path()
+local SHELL_PATH_DIRS: { string }? = nil
+
+local function probe_shell_path()
+	local shell = tern.getenv("SHELL") or ""
+	if shell:sub(1, 1) ~= "/" then
+		return
+	end
+	local name = (shell:match("([^/]+)/*$") or shell):gsub("^%-", "")
+	local sentinel = "@@WT_PATH@@"
+	local script: string? = nil
+	if name == "sh" or name == "bash" or name == "zsh" or name == "ksh" or name == "dash" or name == "mksh" then
+		script = 'printf "\\n' .. sentinel .. '%s@@\\n" "${PATH:-}"'
+	elseif name == "fish" then
+		script = "printf '\\n" .. sentinel .. '%s@@\\n\' (string join : -- $PATH)'
+	end
+	if script == nil then
+		return
+	end
+	pcall(function()
+		tern.process.run({ shell, "-l", "-c", script }, { cwd = HOME, stdin = "", timeout_ms = 5000 }, function(res: ProcessResult)
+			local found: { string }? = nil
+			for raw in (res.stdout .. "\n"):gmatch("(.-)\n") do
+				local line = raw:gsub("\r$", "")
+				local start = line:find(sentinel, 1, true)
+				if start then
+					local path = line:sub(start + #sentinel):match("^(.-)@@$")
+					if path and path ~= "" then
+						local dirs: { string } = {}
+						for entry in (path .. ":"):gmatch("([^:]*):") do
+							if entry:sub(1, 1) == "/" then
+								table.insert(dirs, entry)
+							end
+						end
+						if #dirs > 0 then
+							found = dirs
+						end
+					end
+				end
+			end
+			if found then
+				SHELL_PATH_DIRS = found
+			end
+		end)
+	end)
+end
+
+probe_shell_path()
+
+local function process_env(): { [string]: string }
+	local dirs: { string } = {}
+	local seen: { [string]: boolean } = {}
+	local function add(dir: string)
+		local clean = if #dir > 1 then (dir:gsub("/+$", "")) else dir
+		if clean:sub(1, 1) == "/" and not seen[clean] then
+			seen[clean] = true
+			table.insert(dirs, clean)
+		end
+	end
+	for _, dir in BASE_PATH_DIRS do
+		add(dir)
+	end
+	if SHELL_PATH_DIRS then
+		for _, dir in SHELL_PATH_DIRS do
+			add(dir)
+		end
+	end
+	return { PATH = table.concat(dirs, ":") }
+end
+
 -- A leftover variant has to be `never`. error() alone still typechecks if a case was skipped.
 local function unreachable(x: never): never
 	error("unreachable")
@@ -523,7 +635,7 @@ local function load_options(s: State, prefer: string?, cwd: string?)
 	s.loading, s.list_finished, s.load_error = true, false, nil
 	refilter(s)
 	local argv = { "sh", SCRIPT, "list" }
-	local opts: ProcessOptions = { cwd = cwd or s.cx.cwd or HOME, timeout_ms = LIST_TIMEOUT_MS }
+	local opts: ProcessOptions = { cwd = cwd or s.cx.cwd or HOME, env = process_env(), timeout_ms = LIST_TIMEOUT_MS }
 	local function done(err: string?, rows: { Row }?)
 		s.loading, s.list_finished = false, true
 		if s.closed then
@@ -670,7 +782,7 @@ local function begin(s: State, cmd: Command, row: Row)
 	local inflight: Inflight = { command = cmd, row = row }
 	s.mode = { kind = "running", inflight = inflight }
 	local argv = { "sh", SCRIPT }
-	local opts: ProcessOptions = { cwd = s.cx.cwd or HOME }
+	local opts: ProcessOptions = { cwd = s.cx.cwd or HOME, env = process_env() }
 	local ok, err = pcall(function()
 		argv = argv_of(cmd)
 		tern.process.run(argv, opts, function(res: ProcessResult)
@@ -689,6 +801,13 @@ end
 local function choose(s: State, row: Row)
 	local cmd = command_of(row)
 	if cmd.kind == "open" then
+		pcall(function()
+			tern.process.run(
+				{ "sh", "-c", 'git -C "$1" update-index -q --refresh >/dev/null 2>&1 || true', "sh", cmd.path },
+				{ cwd = cmd.path, env = process_env(), timeout_ms = 5000 },
+				function() end
+			)
+		end)
 		local switched, why = switch_shell(s, cmd.path)
 		if not switched then
 			s.mode = {

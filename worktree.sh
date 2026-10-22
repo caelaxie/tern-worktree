@@ -17,15 +17,45 @@ set -eu
 # so a checkout dies with "git-lfs: command not found" unless the prefix that
 # holds git-lfs is visible. ~/.local/bin is first so a user tern or git wins.
 for dir in \
+	/snap/bin \
+	/nix/var/nix/profiles/default/bin \
+	/run/current-system/sw/bin \
+	"${HOME:-}/.nix-profile/bin" \
+	"${HOME:-}/.asdf/shims" \
+	"${HOME:-}/.local/share/mise/shims" \
+	/opt/local/bin \
 	/home/linuxbrew/.linuxbrew/bin \
+	/usr/local/sbin \
 	/usr/local/bin \
+	/opt/homebrew/sbin \
 	/opt/homebrew/bin \
+	"${HOME:-}/.cargo/bin" \
+	"${HOME:-}/bin" \
 	"${HOME:-}/.local/bin"
 do
 	if [ -n "$dir" ] && [ -d "$dir" ]; then
-		PATH="$dir:$PATH"
+		case ":$PATH:" in
+		*":$dir:"*) ;;
+		*) PATH="$dir:$PATH" ;;
+		esac
 	fi
 done
+if ! command -v git-lfs >/dev/null 2>&1 && [ -n "${SHELL:-}" ] && [ -x "${SHELL:-}" ]; then
+	case ${SHELL##*/} in
+	fish)
+		shell_path=$("$SHELL" -l -c 'string join : -- $PATH' 2>/dev/null) || shell_path=
+		;;
+	sh | bash | zsh | ksh | dash | mksh)
+		shell_path=$("$SHELL" -l -c 'printf "%s" "${PATH:-}"' 2>/dev/null) || shell_path=
+		;;
+	*)
+		shell_path=
+		;;
+	esac
+	if [ -n "$shell_path" ]; then
+		PATH="$PATH:$shell_path"
+	fi
+fi
 export PATH
 
 die() {
@@ -188,6 +218,26 @@ wt_path() {
 	path=$expanded
 }
 
+# Git records same-second smudged LFS entries with sd_size=0 in the worktree
+# index. Refreshing in the next second while git-lfs is on PATH settles the
+# stat cache so Tern's read-only git worker does not re-run git-lfs without it.
+settle_index() {
+	sec=$(date +%s 2>/dev/null) || sec=
+	if [ -n "$sec" ]; then
+		i=0
+		while [ "$(date +%s 2>/dev/null)" = "$sec" ] && [ "$i" -lt 11 ]; do
+			sleep 0.1 2>/dev/null || {
+				sleep 1
+				break
+			}
+			i=$((i + 1))
+		done
+	else
+		sleep 1
+	fi
+	git -C "$1" update-index -q --refresh >/dev/null 2>&1 || true
+}
+
 switch_open() {
 	need git
 	need jq
@@ -204,6 +254,7 @@ switch_open() {
 		printf '.') || exit 1
 	path=${path%.}
 	if [ -n "$path" ]; then
+		git -C "$path" update-index -q --refresh >/dev/null 2>&1 || true
 		printf '%s\n' "$path"
 		return
 	fi
@@ -252,6 +303,7 @@ switch_open() {
 		fi
 		git worktree add -b "$branch" -- "$path" "$base" >&2 || exit 1
 	fi
+	settle_index "$path"
 	# The host cds the terminal that opened the picker. A new tab would leave that block put.
 	printf '%s\n' "$path"
 }
