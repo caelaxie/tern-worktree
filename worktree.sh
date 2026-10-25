@@ -4,6 +4,9 @@
 #   worktree.sh open PATH         open PATH in a new Tern tab and focus it
 #   worktree.sh checkout BRANCH [DIRECTORY]   create an existing branch's worktree, print its path
 #   worktree.sh create BRANCH [DIRECTORY]     create BRANCH (or reuse it), print its path
+# The repository's default branch (origin/HEAD's target, else main, then
+# master) is the exception: it is switched to in the main checkout and that
+# path is printed — a linked worktree is never made for it.
 # A nonempty native directory setting uses DIRECTORY/<main checkout name>/<branch>.
 # With no directory setting, the worktrunk user config's worktree-path is used
 # (~/.config/worktrunk/config.toml, or $XDG_CONFIG_HOME/worktrunk/config.toml).
@@ -238,6 +241,21 @@ settle_index() {
 	git -C "$1" update-index -q --refresh >/dev/null 2>&1 || true
 }
 
+# The branch that lives in the main checkout: origin/HEAD's target, else
+# main, then master — the same order `create` picks a base ref. Printed even
+# when no local ref exists yet; `git switch` then DWIMs it from the remote.
+default_branch() {
+	if head_ref=$(git symbolic-ref -q refs/remotes/origin/HEAD) && [ -n "$head_ref" ]; then
+		printf '%s\n' "${head_ref#refs/remotes/*/}"
+	elif git show-ref --verify --quiet refs/heads/main; then
+		printf '%s\n' main
+	elif git show-ref --verify --quiet refs/heads/master; then
+		printf '%s\n' master
+	else
+		return 1
+	fi
+}
+
 switch_open() {
 	need git
 	need jq
@@ -261,6 +279,14 @@ switch_open() {
 
 	set_main_path "$worktrees" || exit 1
 	[ -n "$main" ] || die "main repository has no worktree"
+	# The default branch belongs to the main checkout: switch it back in
+	# place rather than parking it in a linked worktree.
+	if default=$(default_branch) && [ "$branch" = "$default" ]; then
+		git -C "$main" switch "$branch" >&2 || exit 1
+		settle_index "$main"
+		printf '%s\n' "$main"
+		return
+	fi
 	directory=${3:-}
 	if [ -n "$directory" ]; then
 		case $directory in

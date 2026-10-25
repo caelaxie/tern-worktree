@@ -56,6 +56,7 @@ If a command fails, its output is shown in the picker.
 ### Worktree behavior
 
 - An existing registered worktree for the selected branch is reused, regardless of the configured directory.
+- The repository's default branch — `origin/HEAD`'s target, else `main`, then `master` — stays in the main checkout. Selecting it when it has no worktree switches the main checkout to it and `cd`s the terminal there; no linked worktree is created.
 - Worktree paths are passed literally, preserving spaces and newlines, including trailing newlines.
 - With no directory setting, a new worktree uses the top-level `worktree-path` in the worktrunk user config (`~/.config/worktrunk/config.toml`, or `$XDG_CONFIG_HOME/worktrunk/config.toml`). `{{ repo }}`, `{{ repo_path }}`, `{{ branch }}`, and `{{ branch | sanitize }}` are expanded (`sanitize` replaces `/` and `\` with `-`). `~` is the home directory. A relative template is relative to the main checkout. The current user config places branch `feature/login` of repository `app` at `~/worktrees/app/feature-login`.
 - If that config has no `worktree-path`, a new worktree is created beside the main checkout at `<repo>.<branch>`, with `/` in the branch name replaced by `-`, even when invoked from a linked worktree. For example, branch `feature/login` in repository `/projects/app` uses `/projects/app.feature-login`.
