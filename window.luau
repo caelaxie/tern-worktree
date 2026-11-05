@@ -1,6 +1,7 @@
 --!strict
--- Worktree, window half: the stylesheet and palette commands. Each command
--- focuses its existing dialog pane or opens a split below the focused pane.
+-- Worktree, window half: the stylesheet and palette commands. Opening the
+-- picker or the configuration focuses its existing pane or opens a split below
+-- the focused pane; removing the current worktree always opens a fresh picker.
 -- The picker lists the repository's worktrees and branches (host.luau);
 -- nothing is read from the plugin's files here.
 
@@ -40,6 +41,42 @@ tern.command({
 	run = function(cx: WindowCx)
 		remember_shell(cx)
 		open_dialog(cx, "worktree.picker")
+	end,
+})
+
+--- The directory whose worktree "Remove current worktree" targets: the focused
+--- pane's, or the remembered terminal's while the picker has focus.
+local function current_cwd(cx: WindowCx): string?
+	local id = cx.session:focused()
+	local info = if id ~= nil then cx.session:pane(id) else nil
+	if info ~= nil and info.block == "worktree.picker" then
+		local saved = tern.kv.get("shell_pane")
+		info = if type(saved) == "number" then cx.session:pane(saved) else nil
+	end
+	if info == nil or info.cwd == nil or info.cwd == "" then
+		return nil
+	end
+	return info.cwd
+end
+
+tern.command({
+	id = "remove_current_worktree",
+	title = "Worktree: Remove current worktree",
+	icon = "puzzle",
+	run = function(cx: WindowCx)
+		remember_shell(cx)
+		local cwd = current_cwd(cx)
+		if cwd == nil then
+			cx:toast("error", "No worktree to remove", "Focus a terminal inside a linked worktree.")
+			return
+		end
+		-- An open picker can't take new launch args, so it gives way to one that can.
+		for _, pane in cx.session:panes() do
+			if pane.block == "worktree.picker" then
+				cx.layout:close(pane.pane)
+			end
+		end
+		cx:new_block("worktree.picker", { "remove-current", cwd }, "below")
 	end,
 })
 

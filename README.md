@@ -4,8 +4,6 @@ A [Tern](https://docs.stencil.so/tern/) plugin for managing Git worktrees from t
 
 This is a fork of [nibblebot/tern-worktree](https://github.com/nibblebot/tern-worktree) by Joshua Hanson.
 
-![Opening existing Git worktrees and creating new Git worktrees from Tern's command palette](assets/worktree-demo.gif)
-
 ## Requirements
 
 - Tern 0.9.8 or later
@@ -51,10 +49,13 @@ Optionally bind the picker to a key. Add this to `keybinds` in Tern's `settings.
 ```json
 {
   "keybinds": {
-    "alt+shift+z": ["plugin.worktree.open_worktrees"]
+    "alt+shift+z": ["plugin.worktree.open_worktrees"],
+    "alt+shift+cmd+backspace": ["plugin.worktree.remove_current_worktree"]
   }
 }
 ```
+
+The second binding runs **Worktree: Remove current worktree**, which has no default key. It opens the Remove sheet for the linked worktree that the focused terminal is in. **Enter** removes it and its branch, then the terminal `cd`s back to the main checkout and the picker closes. **Esc** closes the picker without running Git. The main checkout is never removed.
 
 Save the settings and reopen the Tern window to load the binding.
 

@@ -48,6 +48,8 @@ type State = {
 	sel: number, -- index into `shown`
 	closed: boolean,
 	cwd: string?, -- replaces cx.cwd once a remove deletes the directory it names
+	pending: string?, -- a directory whose worktree gets the Remove sheet once the list loads
+	oneshot: boolean, -- opened only to remove one worktree: closes when that ends
 }
 
 local NOTE_MS = 2500 -- how long a refused-character note stays
@@ -636,6 +638,33 @@ local function list_cwd(s: State, removed: string?): string
 	return HOME
 end
 
+--- Opens the Remove sheet for the worktree holding `s.pending`.
+local function resolve_pending(s: State)
+	local target = s.pending
+	if target == nil then
+		return
+	end
+	s.pending = nil
+	local best: (Main | Linked)? = nil
+	for _, row in s.rows do
+		if row.kind == "main" or row.kind == "linked" then
+			-- The longest match wins: a linked worktree may sit inside the main checkout.
+			if path_inside(target, row.path) and (best == nil or #row.path > #best.path) then
+				best = row
+			end
+		end
+	end
+	if best == nil then
+		s.oneshot = false
+		show_note(s, `{show_home(target)} isn't inside a worktree of this repository.`)
+	elseif best.kind == "main" then
+		s.oneshot = false
+		show_note(s, remove_refusal(best))
+	else
+		s.mode = { kind = "confirm", row = best, force = false }
+	end
+end
+
 local function load_options(s: State, prefer: string?)
 	s.loading, s.list_finished, s.load_error = true, false, nil
 	refilter(s)
@@ -649,6 +678,7 @@ local function load_options(s: State, prefer: string?)
 		s.load_error = err
 		s.rows = rows or {}
 		refilter(s, prefer)
+		resolve_pending(s)
 		render(s)
 		-- Kept now, not at the next key: a restart may come before any.
 		pcall(function()
@@ -783,6 +813,10 @@ local function finish(s: State, inflight: Inflight, status: number, output: stri
 	if status == 0 and inflight.command.kind == "remove" then
 		local moved = leave_removed(s, inflight.command.path)
 		s.cx:toast("success", label_text(inflight.row), if moved then `exit 0, cd {show_home(moved)}` else "exit 0")
+		if s.oneshot then
+			close(s)
+			return
+		end
 		s.mode = { kind = "list" }
 		s.cwd = list_cwd(s, inflight.command.path)
 		load_options(s, freed_branch(inflight.row))
@@ -1247,7 +1281,7 @@ local function list_key(s: State, key: Key): boolean?
 end
 
 tern.block.define("picker", {
-	init = function(cx: BlockCx, _args: { string }, saved: any): State
+	init = function(cx: BlockCx, args: { string }, saved: any): State
 		local s: State = {
 			cx = cx,
 			mode = { kind = "list" },
@@ -1258,6 +1292,7 @@ tern.block.define("picker", {
 			shown = {},
 			sel = 1,
 			closed = false,
+			oneshot = false,
 		}
 		if type(saved) == "table" then
 			-- A restart: the filter text as it was, and the list as it last finished.
@@ -1273,6 +1308,10 @@ tern.block.define("picker", {
 			if restore_rows(s, saved) then
 				return s
 			end
+		end
+		-- Not on a restart (`saved` set): the launch args would reopen a finished request.
+		if saved == nil and args[1] == "remove-current" and type(args[2]) == "string" and args[2] ~= "" then
+			s.pending, s.oneshot = args[2], true
 		end
 		load_options(s)
 		return s
@@ -1337,11 +1376,16 @@ tern.block.define("picker", {
 			end
 		elseif ev.act == "back" then
 			if s.mode.kind == "outcome" then
+				s.oneshot = false
 				s.mode = { kind = "list" }
 			end
 		elseif ev.act == "cancel" then
 			if s.mode.kind == "confirm" then
-				s.mode = { kind = "list" }
+				if s.oneshot then
+					close(s)
+				else
+					s.mode = { kind = "list" }
+				end
 			end
 		elseif ev.act == "force" then
 			local mode = s.mode
@@ -1376,6 +1420,7 @@ tern.block.define("picker", {
 			if name == "enter" then
 				close(s)
 			elseif esc then
+				s.oneshot = false
 				s.mode = { kind = "list" }
 			else
 				return false
@@ -1384,6 +1429,8 @@ tern.block.define("picker", {
 		elseif mode.kind == "confirm" then
 			if name == "enter" then
 				accept_confirm(s)
+			elseif esc and s.oneshot then
+				close(s)
 			elseif esc then
 				s.mode = { kind = "list" }
 			else
