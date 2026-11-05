@@ -47,6 +47,7 @@ type State = {
 	shown: { Shown },
 	sel: number, -- index into `shown`
 	closed: boolean,
+	cwd: string?, -- replaces cx.cwd once a remove deletes the directory it names
 }
 
 local NOTE_MS = 2500 -- how long a refused-character note stays
@@ -612,9 +613,13 @@ local function path_inside(path: string, root: string): boolean
 	return path:sub(1, #prefix) == prefix
 end
 
+local function work_cwd(s: State): string
+	return s.cwd or s.cx.cwd or HOME
+end
+
 -- spawn reports ENOENT when cwd is gone, which reads as "sh" missing.
 local function list_cwd(s: State, removed: string?): string
-	local cwd = s.cx.cwd or HOME
+	local cwd = work_cwd(s)
 	if removed == nil or removed == "" or not path_inside(cwd, removed) then
 		return cwd
 	end
@@ -631,11 +636,11 @@ local function list_cwd(s: State, removed: string?): string
 	return HOME
 end
 
-local function load_options(s: State, prefer: string?, cwd: string?)
+local function load_options(s: State, prefer: string?)
 	s.loading, s.list_finished, s.load_error = true, false, nil
 	refilter(s)
 	local argv = { "sh", SCRIPT, "list" }
-	local opts: ProcessOptions = { cwd = cwd or s.cx.cwd or HOME, env = process_env(), timeout_ms = LIST_TIMEOUT_MS }
+	local opts: ProcessOptions = { cwd = work_cwd(s), env = process_env(), timeout_ms = LIST_TIMEOUT_MS }
 	local function done(err: string?, rows: { Row }?)
 		s.loading, s.list_finished = false, true
 		if s.closed then
@@ -679,7 +684,8 @@ local function sh_single(path: string): string
 end
 
 local function shell_program(program: string?): boolean
-	local base = (program or ""):match("[^/]+$") or ""
+	-- A login shell can report its name as "-zsh".
+	local base = ((program or ""):match("[^/]+$") or ""):gsub("^%-", "")
 	return base == "zsh" or base == "bash" or base == "fish" or base == "sh"
 end
 
@@ -734,14 +740,52 @@ local function switch_shell(s: State, path: string): (boolean, string?)
 	return true, nil
 end
 
+--- cd the shell back to the main checkout when it sat inside the removed
+--- worktree. Returns the main checkout's path when it did.
+local function leave_removed(s: State, removed: string?): string?
+	if removed == nil or removed == "" then
+		return nil
+	end
+	local main: string? = nil
+	for _, row in s.rows do
+		if row.kind == "main" then
+			main = row.path
+			break
+		end
+	end
+	if main == nil or path_inside(main, removed) then
+		return nil
+	end
+	local pane = shell_pane(s)
+	if pane == nil then
+		return nil
+	end
+	local cwd, program = nil :: string?, nil :: string?
+	for _, info in tern.pane.list() do
+		if info.pane == pane then
+			cwd, program = info.cwd, info.program
+			break
+		end
+	end
+	cwd = cwd or s.cx.cwd
+	-- A busy pane reports its foreground program; typing cd there would reach that program.
+	if cwd == nil or not path_inside(cwd, removed) or not shell_program(program) then
+		return nil
+	end
+	local switched = switch_shell(s, main)
+	return if switched then main else nil
+end
+
 local function finish(s: State, inflight: Inflight, status: number, output: string, timed_out: boolean, stdout: string?)
 	if s.closed then
 		return
 	end
 	if status == 0 and inflight.command.kind == "remove" then
-		s.cx:toast("success", label_text(inflight.row), "exit 0")
+		local moved = leave_removed(s, inflight.command.path)
+		s.cx:toast("success", label_text(inflight.row), if moved then `exit 0, cd {show_home(moved)}` else "exit 0")
 		s.mode = { kind = "list" }
-		load_options(s, freed_branch(inflight.row), list_cwd(s, inflight.command.path))
+		s.cwd = list_cwd(s, inflight.command.path)
+		load_options(s, freed_branch(inflight.row))
 		render(s)
 		return
 	end
@@ -782,7 +826,7 @@ local function begin(s: State, cmd: Command, row: Row)
 	local inflight: Inflight = { command = cmd, row = row }
 	s.mode = { kind = "running", inflight = inflight }
 	local argv = { "sh", SCRIPT }
-	local opts: ProcessOptions = { cwd = s.cx.cwd or HOME, env = process_env() }
+	local opts: ProcessOptions = { cwd = work_cwd(s), env = process_env() }
 	local ok, err = pcall(function()
 		argv = argv_of(cmd)
 		tern.process.run(argv, opts, function(res: ProcessResult)
@@ -1062,7 +1106,7 @@ end
 
 local function remove_hint(row: Row): { Span }?
 	if row.kind == "linked" or row.kind == "branch" then
-		return { ui.span("del", "key"), ui.span(" remove  ", "muted") }
+		return { ui.span("⌘⌫", "key"), ui.span(" remove  ", "muted") }
 	elseif row.kind == "main" then
 		return { ui.span("main checkout stays", "muted") }
 	elseif row.kind == "new" then
@@ -1158,13 +1202,22 @@ local function list_key(s: State, key: Key): boolean?
 		else
 			set_query(s, "")
 		end
+	elseif (name == "backspace" or name == "delete") and key.meta then
+		if key.ctrl or key.alt or key.shift then
+			return false
+		end
+		local m = s.shown[s.sel]
+		if not m then
+			return false
+		end
+		request_remove(s, m.row)
 	elseif name == "backspace" then
 		if s.query == "" then
 			return false
 		end
 		set_query(s, if key.ctrl or key.alt then "" else drop_last_char(s.query))
 	elseif name == "delete" then
-		if key.ctrl or key.alt or key.meta or key.shift then
+		if key.ctrl or key.alt or key.shift then
 			return false
 		end
 		local m = s.shown[s.sel]

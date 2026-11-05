@@ -41,13 +41,13 @@ Focus a terminal pane in a Git repository and open **Worktree: Worktrees** from 
 
 Type a new branch name to get a **Create '<name>' worktree** entry. It creates the branch and its worktree, then `cd`s the terminal in this tab into it. If a local branch with that name already exists, the existing branch is used instead of failing.
 
-Press **Delete** to remove the selected linked worktree, or a branch that has no worktree. On a keyboard without a forward-delete key, press **Fn+Delete**. **Backspace** still deletes the last character of the filter.
+Press **Cmd+Backspace** (or **Cmd+Delete**) to remove the selected linked worktree, or a branch that has no worktree. This works even while the filter has text. A plain forward **Delete** does the same. **Backspace** without Cmd still deletes the last character of the filter.
 
-Delete on a worktree opens a sheet titled **Remove worktree**. **Remove** or **Enter** deletes that worktree and its branch, even when the branch is not merged. **Cancel** or **Esc** returns to the list and does not run Git. **Force…** opens a second sheet. **Force remove** or **Enter** there also deletes a dirty or locked worktree. Uncommitted changes and untracked files are deleted. A detached worktree has no branch to delete. While the main checkout is selected, the dock reads `main checkout stays` and **Delete** does not open the sheet. **Delete** on the create row explains why and does not run Git.
+Cmd+Backspace on a worktree opens a sheet titled **Remove worktree**. **Remove** or **Enter** deletes that worktree and its branch, even when the branch is not merged. **Cancel** or **Esc** returns to the list and does not run Git. **Force…** opens a second sheet. **Force remove** or **Enter** there also deletes a dirty or locked worktree. Uncommitted changes and untracked files are deleted. A detached worktree has no branch to delete. While the main checkout is selected, the dock reads `main checkout stays` and **Cmd+Backspace** does not open the sheet. **Cmd+Backspace** on the create row explains why and does not run Git.
 
-**Delete** on a branch row opens **Delete branch**. **Delete** or **Enter** runs `git branch -D`. The branch is removed even if it is not merged.
+**Cmd+Backspace** on a branch row opens **Delete branch**. **Delete** or **Enter** runs `git branch -D`. The branch is removed even if it is not merged.
 
-After a remove, the picker stays open and reloads. If a plain remove is refused, the result sheet has **Force…**, which opens the force confirmation before anything is deleted.
+After a remove, the picker stays open and reloads. If the terminal in this tab was inside the removed worktree and sits at a shell prompt, it `cd`s back to the main checkout. If a plain remove is refused, the result sheet has **Force…**, which opens the force confirmation before anything is deleted.
 
 The filter accepts only letters, digits, `.`, `_`, `/` and `-`; other characters are dropped as you type. Branch names containing `+`, `@` or `#` can't be created from the picker.
 
@@ -84,7 +84,7 @@ Save an empty value or click **Use default** to restore the default: new worktre
 | type | filter (fuzzy, over name and path or commit) |
 | ↑ ↓, Ctrl+P / Ctrl+N, Tab / Shift+Tab | move the selection |
 | Enter | open, check out or create the selected entry |
-| Delete | remove the selected linked worktree, after confirm |
+| Cmd+Backspace, Cmd+Delete, Delete | remove the selected linked worktree or branch, after confirm |
 | Esc | clear the filter; with an empty filter, close. On the confirm sheet, return to the list |
 | Ctrl+U, Ctrl+W | clear the filter, delete the last word |
 | Ctrl+R | reload the list |
